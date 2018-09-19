@@ -12,6 +12,12 @@ typedef struct _zend_op_72               zend_op_72;
 typedef struct _sapi_globals_struct_72   sapi_globals_struct_72;
 typedef struct _sapi_request_info_72     sapi_request_info_72;
 
+typedef struct _php_core_globals_72      php_core_globals_72;
+typedef struct _zend_array_72            zend_array_72;
+typedef struct _zval_72                  zval_72;
+typedef struct _Bucket_72                Bucket_72;
+
+
 // Assumes 8-byte pointers
 
                                                 // offset   length
@@ -50,7 +56,7 @@ struct __attribute__((__packed__)) _zend_class_entry_72 {
 struct __attribute__((__packed__)) _zend_string_72 {
     uint8_t pad0[16];                           // 0        +16
     size_t len;                                 // 16       +8
-    char *val;                                  // 24       +8
+    char val[1];                                // 24     +8
 };
 
 struct __attribute__((__packed__)) _zend_op_72 {
@@ -73,5 +79,33 @@ struct __attribute__((__packed__)) _sapi_globals_struct_72 {
     uint8_t pad1[384];                          // 56       +384
     double global_request_time;                 // 440      +8
 };
+
+struct __attribute__((__packed__)) _zval_72 {
+    uint64_t value;                             // 0        +8
+    // if big endian gets supported, this order will need to change
+    unsigned char type;                         // 8        +1
+    uint8_t pad0[3];                            // 9        +3
+    uint32_t u2;                                // 12       +4
+};
+
+struct __attribute__((__packed__)) _php_core_globals_72 {
+    uint8_t pad0[368];                          // 0        +368
+    zval_72 http_globals[6];                    // 368      +48
+};
+
+struct __attribute__((__packed__)) _Bucket_72 {
+    zval_72 val;                               // 0        +16
+    uint64_t h;                                // 16       +8
+    zend_string_72 *key;                       // 24       +32
+};
+
+struct __attribute__((__packed__)) _zend_array_72 {
+    uint8_t pad0[16];                           // 0        +16
+    Bucket_72 *arData;                          // 16       +8
+    uint32_t nNumUsed;                          // 24       +4
+    uint32_t nNumOfElements;                    // 28       +4
+    uint32_t nTableSize;                        // 32       +4
+};
+
 
 #endif

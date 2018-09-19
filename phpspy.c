@@ -51,8 +51,9 @@ char *opt_phpv = "72";
 int opt_pause = 0;
 
 size_t zend_string_val_offset = 0;
+FILE *fout = NULL;
 int done = 0;
-int (*dump_trace_ptr)(pid_t, FILE *, unsigned long long, unsigned long long) = NULL;
+int (*dump_trace_ptr)(pid_t, FILE *, unsigned long long, unsigned long long, unsigned long long) = NULL;
 
 extern void usage(FILE *fp, int exit_code);
 static void parse_opts(int argc, char **argv);
@@ -66,18 +67,23 @@ static int maybe_pause_pid(pid_t pid);
 static int maybe_unpause_pid(pid_t pid);
 static void redirect_child_stdio(int proc_fd, char *opt_path);
 static int open_fout(FILE **fout);
-static int find_addresses(pid_t pid, unsigned long long *executor_globals_addr, unsigned long long *sapi_globals_addr);
+static int find_addresses(pid_t pid, unsigned long long *executor_globals_addr, unsigned long long *sapi_globals_addr, unsigned long long *core_globals_addr);
 static int copy_proc_mem(pid_t pid, void *raddr, void *laddr, size_t size);
 static void try_clock_gettime(struct timespec *ts);
 static void calc_sleep_time(struct timespec *end, struct timespec *start, struct timespec *sleep);
 static int get_symbol_addr(pid_t pid, const char *symbol, unsigned long long *raddr);
 #ifdef USE_ZEND
-static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr);
+static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr);
+static int print_array_recursive(pid_t pid, FILE *fout, zend_array *array_ptr);
 #else
-static int dump_trace_70(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr);
-static int dump_trace_71(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr);
-static int dump_trace_72(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr);
-static int dump_trace_73(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr);
+static int dump_trace_70(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr);
+static int print_array_recursive_70(pid_t pid, FILE *fout, zend_array_70 *array_ptr);
+static int dump_trace_71(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr);
+static int print_array_recursive_71(pid_t pid, FILE *fout, zend_array_71 *array_ptr);
+static int dump_trace_72(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr);
+static int print_array_recursive_72(pid_t pid, FILE *fout, zend_array_72 *array_ptr);
+static int dump_trace_73(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr);
+static int print_array_recursive_73(pid_t pid, FILE *fout, zend_array_73 *array_ptr);
 #endif
 
 void usage(FILE *fp, int exit_code) {
@@ -239,10 +245,11 @@ int main_pid(pid_t pid) {
     unsigned long long n;
     unsigned long long executor_globals_addr;
     unsigned long long sapi_globals_addr;
+    unsigned long long core_globals_addr;
     struct timespec start_time, end_time, sleep_time;
     FILE *fout = NULL;
 
-    try(rv, find_addresses(pid, &executor_globals_addr, &sapi_globals_addr));
+    try(rv, find_addresses(pid, &executor_globals_addr, &sapi_globals_addr, &core_globals_addr));
     try(rv, open_fout(&fout));
 
     #ifdef USE_ZEND
@@ -265,7 +272,7 @@ int main_pid(pid_t pid) {
     while (!done) {
         try_clock_gettime(&start_time);
         rv |= maybe_pause_pid(pid);
-        rv |= dump_trace_ptr(pid, fout, executor_globals_addr, sapi_globals_addr);
+        rv |= dump_trace_ptr(pid, fout, executor_globals_addr, sapi_globals_addr, core_globals_addr);
         rv |= maybe_unpause_pid(pid);
         if (++n == opt_trace_limit || (rv & 2) != 0) break;
         try_clock_gettime(&end_time);
@@ -369,7 +376,7 @@ static int open_fout(FILE **fout) {
     return 0;
 }
 
-static int find_addresses(pid_t pid, unsigned long long *executor_globals_addr, unsigned long long *sapi_globals_addr) {
+static int find_addresses(pid_t pid, unsigned long long *executor_globals_addr, unsigned long long *sapi_globals_addr, unsigned long long *core_globals_addr) {
     if (opt_executor_globals_addr != 0) {
         *executor_globals_addr = opt_executor_globals_addr;
     } else if (get_symbol_addr(pid, "executor_globals", executor_globals_addr) != 0) {
@@ -378,6 +385,9 @@ static int find_addresses(pid_t pid, unsigned long long *executor_globals_addr, 
     if (opt_sapi_globals_addr != 0) {
         *sapi_globals_addr = opt_sapi_globals_addr;
     } else if (get_symbol_addr(pid, "sapi_globals", sapi_globals_addr) != 0) {
+        return 1;
+    }
+    if (get_symbol_addr(pid, "core_globals", core_globals_addr) != 0) {
         return 1;
     }
     #ifdef USE_ZEND

@@ -1,4 +1,24 @@
-static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr) {
+#define IS_UNDEF                    0
+#define IS_NULL                     1
+#define IS_FALSE                    2
+#define IS_TRUE                     3
+#define IS_LONG                     4
+#define IS_DOUBLE                   5
+#define IS_STRING                   6
+#define IS_ARRAY                    7
+#define IS_OBJECT                   8
+#define IS_RESOURCE                 9
+#define IS_REFERENCE                10
+
+#define try_copy_proc_mem(__what, __raddr, __laddr, __size) do {          \
+    if ((rv = copy_proc_mem(pid, (__raddr), (__laddr), (__size))) != 0) { \
+        fprintf(stderr, "dump_trace: Failed to copy %s\n", (__what));     \
+        if (wrote_trace) printf("%s", opt_trace_delim);                   \
+        return rv;                                                        \
+    }                                                                     \
+} while(0)
+
+static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals_addr, unsigned long long sapi_globals_addr, unsigned long long core_globals_addr) {
     char func[STR_LEN+1];
     char file[STR_LEN+1];
     char class[STR_LEN+1];
@@ -21,17 +41,10 @@ static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals
     zend_function zfunc;
     zend_string zstring;
     sapi_globals_struct sapi_globals;
+    php_core_globals core_globals;
 
     depth = 0;
     wrote_trace = 0;
-
-    #define try_copy_proc_mem(__what, __raddr, __laddr, __size) do {          \
-        if ((rv = copy_proc_mem(pid, (__raddr), (__laddr), (__size))) != 0) { \
-            fprintf(stderr, "dump_trace: Failed to copy %s\n", (__what));     \
-            if (wrote_trace) printf("%s", opt_trace_delim);                   \
-            return rv;                                                        \
-        }                                                                     \
-    } while(0)
 
     executor_globals.current_execute_data = NULL;
     try_copy_proc_mem("executor_globals", (void*)executor_globals_addr, &executor_globals, sizeof(executor_globals));
@@ -85,6 +98,11 @@ static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals
         depth += 1;
     }
     if (wrote_trace) {
+
+        try_copy_proc_mem("core_globals", (void*)core_globals_addr, &core_globals, sizeof(core_globals));
+        zend_array *server_ptr = (zend_array*) core_globals.http_globals[3].value;
+        print_array_recursive(pid, fout, server_ptr);
+
         if (opt_capture_req) {
             try_copy_proc_mem("sapi_globals", (void*)sapi_globals_addr, &sapi_globals, sizeof(sapi_globals));
             #define try_copy_sapi_global_field(__field, __local) do {                                       \
@@ -106,6 +124,58 @@ static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals
         }
     }
 
-    #undef try_copy_proc_mem
     return 0;
 }
+
+static int print_array_recursive(pid_t pid, FILE *fout, zend_array *array_ptr) {
+  int rv;
+  int wrote_trace;
+  zend_array array;
+
+  wrote_trace = 1;
+  try_copy_proc_mem("array", (void*) array_ptr , &array, sizeof(array));
+  size_t length = array.nNumOfElements;
+  Bucket *buckets = (Bucket*) malloc(sizeof(Bucket) * length);
+  try_copy_proc_mem("buckets", (void*) array.arData, buckets, sizeof(Bucket) * length);
+  unsigned int i;
+  for (i = 0; i < length; i++) {
+    // no keys
+    if (buckets[i].key != 0) {
+      zend_string *key_ptr = (zend_string*) buckets[i].key;
+      zend_string key;
+      try_copy_proc_mem("key", (void*) key_ptr, &key, sizeof(key));
+      zend_string *keyval = malloc(sizeof(key) + key.len);
+      try_copy_proc_mem("key string", (void*) key_ptr, keyval, sizeof(key) + key.len);
+      fprintf(fout, "%s : ", (*keyval).val);
+    }
+
+    int type = (int) buckets[i].val.type;
+    switch (type) {
+    case IS_LONG: {
+      fprintf(fout, "%ld\n", buckets[i].val.value);
+      break;
+    }
+    case IS_DOUBLE: {
+      fprintf(fout, "%lf\n", (double) buckets[i].val.value);
+      break;
+    }
+    case IS_STRING: {
+      zend_string *value_ptr = (zend_string*) buckets[i].val.value;
+      zend_string value;
+      try_copy_proc_mem("value", (void*) value_ptr, &value, sizeof(value));
+      zend_string *valueval = malloc(sizeof(value) + value.len);
+      try_copy_proc_mem("value", (void*) value_ptr, valueval, sizeof(value) + value.len);
+      fprintf(fout, "\"%s\"\n", (*valueval).val);
+      break;
+    }
+    case IS_ARRAY: {
+      print_array_recursive(pid, fout, (zend_array*) buckets[i].val.value);
+      break;
+    }
+    default:  fprintf(fout, "value not supported, found type: %d\n", type); break;
+    }
+  }
+  return 0;
+}
+
+#undef try_copy_proc_mem
