@@ -1,14 +1,14 @@
-#define IS_UNDEF                    0
-#define IS_NULL                     1
-#define IS_FALSE                    2
-#define IS_TRUE                     3
-#define IS_LONG                     4
-#define IS_DOUBLE                   5
-#define IS_STRING                   6
-#define IS_ARRAY                    7
-#define IS_OBJECT                   8
-#define IS_RESOURCE                 9
-#define IS_REFERENCE                10
+#define TYPE_IS_UNDEF                    0
+#define TYPE_IS_NULL                     1
+#define TYPE_IS_FALSE                    2
+#define TYPE_IS_TRUE                     3
+#define TYPE_IS_LONG                     4
+#define TYPE_IS_DOUBLE                   5
+#define TYPE_IS_STRING                   6
+#define TYPE_IS_ARRAY                    7
+#define TYPE_IS_OBJECT                   8
+#define TYPE_IS_RESOURCE                 9
+#define TYPE_IS_REFERENCE                10
 
 #define try_copy_proc_mem(__what, __raddr, __laddr, __size) do {          \
     if ((rv = copy_proc_mem(pid, (__raddr), (__laddr), (__size))) != 0) { \
@@ -123,59 +123,56 @@ static int dump_trace(pid_t pid, FILE *fout, unsigned long long executor_globals
             fprintf(fout, "# - - - - -%s", opt_trace_delim);
         }
     }
-
     return 0;
 }
 
 static int print_array_recursive(pid_t pid, FILE *fout, zend_array *array_ptr) {
-  int rv;
-  int wrote_trace;
-  zend_array array;
+    int wrote_trace, rv;
+    wrote_trace = 1;
+    zend_array array;
+    try_copy_proc_mem("array", (void*) array_ptr , &array, sizeof(array));
+    size_t length = array.nNumOfElements;
+    Bucket *buckets = (Bucket*) malloc(sizeof(Bucket) * length);
+    try_copy_proc_mem("buckets", (void*) array.arData, buckets, sizeof(Bucket) * length);
+    unsigned int i;
+    for (i = 0; i < length; i++) {
+        // if it is a non-associative array, don't attempt to  print the key
+        if (buckets[i].key != 0) {
+            zend_string *key_ptr = (zend_string*) buckets[i].key;
+            zend_string key;
+            try_copy_proc_mem("key", (void*) key_ptr, &key, sizeof(key));
+            zend_string *keyval = malloc(sizeof(key) + key.len);
+            try_copy_proc_mem("key string", (void*) key_ptr, keyval, sizeof(key) + key.len);
+            fprintf(fout, "%s : ", (*keyval).val);
+        }
 
-  wrote_trace = 1;
-  try_copy_proc_mem("array", (void*) array_ptr , &array, sizeof(array));
-  size_t length = array.nNumOfElements;
-  Bucket *buckets = (Bucket*) malloc(sizeof(Bucket) * length);
-  try_copy_proc_mem("buckets", (void*) array.arData, buckets, sizeof(Bucket) * length);
-  unsigned int i;
-  for (i = 0; i < length; i++) {
-    // no keys
-    if (buckets[i].key != 0) {
-      zend_string *key_ptr = (zend_string*) buckets[i].key;
-      zend_string key;
-      try_copy_proc_mem("key", (void*) key_ptr, &key, sizeof(key));
-      zend_string *keyval = malloc(sizeof(key) + key.len);
-      try_copy_proc_mem("key string", (void*) key_ptr, keyval, sizeof(key) + key.len);
-      fprintf(fout, "%s : ", (*keyval).val);
+        int type = (int) buckets[i].val.type;
+        switch (type) {
+            case TYPE_IS_LONG: {
+                fprintf(fout, "%ld\n", buckets[i].val.value);
+                break;
+            }
+            case TYPE_IS_DOUBLE: {
+                fprintf(fout, "%lf\n", (double) buckets[i].val.value);
+                break;
+            }
+            case TYPE_IS_STRING: {
+                zend_string *value_ptr = (zend_string*) buckets[i].val.value;
+                zend_string value;
+                try_copy_proc_mem("value", (void*) value_ptr, &value, sizeof(value));
+                zend_string *valueval = malloc(sizeof(value) + value.len);
+                try_copy_proc_mem("value", (void*) value_ptr, valueval, sizeof(value) + value.len);
+                fprintf(fout, "\"%s\"\n", (*valueval).val);
+                break;
+            }
+            case TYPE_IS_ARRAY: {
+                print_array_recursive(pid, fout, (zend_array*) buckets[i].val.value);
+                break;
+            }
+            default:  fprintf(fout, "value not supported, found type: %d\n", type); break;
+        }
     }
-
-    int type = (int) buckets[i].val.type;
-    switch (type) {
-    case IS_LONG: {
-      fprintf(fout, "%ld\n", buckets[i].val.value);
-      break;
-    }
-    case IS_DOUBLE: {
-      fprintf(fout, "%lf\n", (double) buckets[i].val.value);
-      break;
-    }
-    case IS_STRING: {
-      zend_string *value_ptr = (zend_string*) buckets[i].val.value;
-      zend_string value;
-      try_copy_proc_mem("value", (void*) value_ptr, &value, sizeof(value));
-      zend_string *valueval = malloc(sizeof(value) + value.len);
-      try_copy_proc_mem("value", (void*) value_ptr, valueval, sizeof(value) + value.len);
-      fprintf(fout, "\"%s\"\n", (*valueval).val);
-      break;
-    }
-    case IS_ARRAY: {
-      print_array_recursive(pid, fout, (zend_array*) buckets[i].val.value);
-      break;
-    }
-    default:  fprintf(fout, "value not supported, found type: %d\n", type); break;
-    }
-  }
-  return 0;
+    return 0;
 }
 
 #undef try_copy_proc_mem
