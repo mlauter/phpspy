@@ -56,7 +56,7 @@ struct __attribute__((__packed__)) _zend_class_entry_70 {
 struct __attribute__((__packed__)) _zend_string_70 {
     uint8_t pad0[16];                           // 0        +16
     size_t len;                                 // 16       +8
-    char *val;                                  // 24       +8
+    char val[1];                                // 24       +8
 };
 
 struct __attribute__((__packed__)) _zend_op_70 {
